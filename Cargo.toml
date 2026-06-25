@@ -1,0 +1,29 @@
+[package]
+name = "cockroach-reminder"
+version = "1.0.0"
+description = "A break reminder app with cockroach animations that crawl across your screen"
+authors = ["XUANLI"]
+edition = "2021"
+license = "MIT"
+
+[[bin]]
+name = "cockroach-reminder"
+path = "src/main.rs"
+
+[dependencies]
+iced = { version = "0.14", features = ["canvas", "image", "tokio", "advanced"] }
+tray-icon = "0.19"
+notify-rust = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "5"
+rand = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.5"
+
+[profile.release]
+opt-level = 3
+lto = true
