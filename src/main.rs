@@ -83,8 +83,9 @@ impl App {
     fn new() -> (Self, Task<Message>) {
         let settings = Settings::load();
         let mut timer = Timer::new(settings.interval_minutes, settings.duration_seconds);
-
         // Menu-bar-only app (no dock icon), matching `app.dock.hide()`.
+        platform::hide_dock();
+
         let frames = load_sprite_frames(&constants::FRAME_BYTES);
 
         // Auto-start the timer if configured.
@@ -339,14 +340,12 @@ impl App {
                 cockroaches,
             });
 
-            // Once opened, apply click-through / screen-saver level / all-spaces via the
-            // native window handle, and snap the window to cover display `i`.
+            // Once opened, configure the overlay via the native window handle
+            // (platform-specific: macOS uses objc2, Windows uses Win32, Linux uses X11).
             tasks.push(open_task.then(move |id| {
                 window::run(id, move |w| {
                     if let Ok(handle) = w.window_handle() {
-                        if let raw_window_handle::RawWindowHandle::AppKit(h) = handle.as_raw() {
-                            platform::configure_overlay(h.ns_view.as_ptr(), i);
-                        }
+                        platform::configure_overlay(&handle.as_raw(), i);
                     }
                     Message::Noop
                 })
