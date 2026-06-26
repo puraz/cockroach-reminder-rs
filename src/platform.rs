@@ -84,16 +84,6 @@ mod imp {
         }
     }
 
-    /// Bring the app to the front (menu-bar-only apps need `activateIgnoringOtherApps`).
-    pub fn bring_to_front() {
-        unsafe {
-            let app: *mut objc2::runtime::AnyObject =
-                msg_send![class!(NSApplication), sharedApplication];
-            if !app.is_null() {
-                let _: () = msg_send![app, activateIgnoringOtherApps: true];
-            }
-        }
-    }
 
     /// Enumerate all displays.
     pub fn screen_frames() -> Vec<ScreenFrame> {
@@ -173,7 +163,6 @@ mod imp {
     use windows_sys::Win32::UI::WindowsAndMessaging::{HWND_TOPMOST, SWP_NOMOVE, SWP_NOSIZE};
 
     pub fn hide_dock() {}
-    pub fn bring_to_front() {}
 
     unsafe extern "system" fn monitor_enum_proc(
         _hmonitor: HDC,
@@ -234,8 +223,6 @@ mod imp {
     use x11rb::protocol::xinerama::ConnectionExt as _;
     use x11rb::protocol::xproto::ConnectionExt as _;
     pub fn hide_dock() {}
-    pub fn bring_to_front() {}
-
     pub fn screen_frames() -> Vec<ScreenFrame> {
         let mut frames = Vec::new();
         let (conn, _screen_num) = match x11rb::connect(None) {
@@ -337,4 +324,4 @@ mod imp {
 // Public API
 // ---------------------------------------------------------------------------
 
-pub use imp::{bring_to_front, configure_overlay, hide_dock, screen_frames};
+pub use imp::{configure_overlay, hide_dock, screen_frames};
