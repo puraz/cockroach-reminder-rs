@@ -104,32 +104,32 @@ jobs:
             cp "target/${{ matrix.target }}/release/cockroach-reminder" "$APP/Contents/MacOS/"
             # Generate .icns from icon.png
             sips -s format icns assets/icon.png --out "$APP/Contents/Resources/AppIcon.icns" 2>/dev/null || true
-            cat > "$APP/Contents/Info.plist" <<'EOF'
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-        <key>CFBundleExecutable</key>
-        <string>cockroach-reminder</string>
-        <key>CFBundleIdentifier</key>
-        <string>com.cockroach.reminder</string>
-        <key>CFBundleName</key>
-        <string>Cockroach Reminder</string>
-        <key>CFBundleVersion</key>
-        <string>${TAG#v}</string>
-        <key>CFBundleShortVersionString</key>
-        <string>${TAG#v}</string>
-        <key>CFBundleIconFile</key>
-        <string>AppIcon</string>
-        <key>CFBundlePackageType</key>
-        <string>APPL</string>
-        <key>LSMinimumSystemVersion</key>
-        <string>11.0</string>
-        <key>LSUIElement</key>
-        <true/>
-    </dict>
-    </plist>
-    EOF
+            PLIST="$APP/Contents/Info.plist"
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="UTF-8"?>' \
+              '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">' \
+              '<plist version="1.0">' \
+              '<dict>' \
+              '<key>CFBundleExecutable</key>' \
+              '<string>cockroach-reminder</string>' \
+              '<key>CFBundleIdentifier</key>' \
+              '<string>com.cockroach.reminder</string>' \
+              '<key>CFBundleName</key>' \
+              '<string>Cockroach Reminder</string>' \
+              '<key>CFBundleVersion</key>' \
+              "<string>${TAG#v}</string>" \
+              '<key>CFBundleShortVersionString</key>' \
+              "<string>${TAG#v}</string>" \
+              '<key>CFBundleIconFile</key>' \
+              '<string>AppIcon</string>' \
+              '<key>CFBundlePackageType</key>' \
+              '<string>APPL</string>' \
+              '<key>LSMinimumSystemVersion</key>' \
+              '<string>11.0</string>' \
+              '<key>LSUIElement</key>' \
+              '<true/>' \
+              '</dict>' \
+              '</plist>' > "$PLIST"
             tar czf "cockroach-reminder-${TAG}-${{ matrix.target }}.tar.gz" -C "$(dirname "$APP")" "$(basename "$APP")"
           else
             # Linux: raw binary tar.gz
