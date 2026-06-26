@@ -130,6 +130,8 @@ jobs:
               '<true/>' \
               '</dict>' \
               '</plist>' > "$PLIST"
+            chmod +x "$APP/Contents/MacOS/cockroach-reminder"
+            codesign --force --deep --sign - "$APP" 2>/dev/null || true
             tar czf "cockroach-reminder-${TAG}-${{ matrix.target }}.tar.gz" -C "$(dirname "$APP")" "$(basename "$APP")"
           else
             # Linux: raw binary tar.gz
