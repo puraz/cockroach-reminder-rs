@@ -218,6 +218,9 @@ mod imp {
 mod imp {
     use super::*;
     use raw_window_handle::RawWindowHandle;
+    use x11rb::connection::Connection;
+    use x11rb::protocol::xinerama::ConnectionExt as _;
+    use x11rb::protocol::xproto::ConnectionExt as _;
 
     pub fn hide_dock() {}
 
@@ -294,16 +297,15 @@ mod imp {
             state_atom,
             [2, above_atom, 0, 0, 0], // _NET_WM_STATE_ADD
         );
-        if let Ok(event) = event {
-            let _ = conn.send_event(
-                false,
-                root,
-                x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
-                    | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY,
-                event,
-            );
-            let _ = conn.flush();
-        }
+        // ClientMessageEvent::new returns the event directly (x11rb 0.13).
+        let _ = conn.send_event(
+            false,
+            root,
+            x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_REDIRECT
+                | x11rb::protocol::xproto::EventMask::SUBSTRUCTURE_NOTIFY,
+            event,
+        );
+        let _ = conn.flush();
     }
 }
 
