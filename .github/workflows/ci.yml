@@ -94,9 +94,11 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           if [ "${{ runner.os }}" = "Windows" ]; then
-            # Windows: zip with .exe
-            SRC="target/${{ matrix.target }}/release/cockroach-reminder.exe"
-            7z a "cockroach-reminder-${TAG}-${{ matrix.target }}.zip" "$SRC"
+            # Windows: zip with .exe (cd to flatten the directory tree)
+            DEST="cockroach-reminder-${TAG}-${{ matrix.target }}.zip"
+            pushd "target/${{ matrix.target }}/release"
+            7z a "${OLDPWD}/${DEST}" "cockroach-reminder.exe"
+            popd
           elif [ "${{ runner.os }}" = "macOS" ]; then
             # macOS: .app bundle (double-clickable)
             APP="target/cockroach-reminder.app"
