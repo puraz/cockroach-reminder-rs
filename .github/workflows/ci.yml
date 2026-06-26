@@ -83,6 +83,12 @@ jobs:
           sudo apt-get install -y -qq \
             libgtk-3-dev \
             libayatana-appindicator3-dev \
+            libnotify-dev \
+            libxdo-dev
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
             libnotify-dev
 
       - name: cargo build (release)
