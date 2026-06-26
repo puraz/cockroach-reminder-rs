@@ -387,6 +387,7 @@ impl App {
             ..Default::default()
         });
         self.settings_window = Some(id);
+        platform::bring_to_front();
         Task::batch([task.map(Message::SettingsOpened), window::gain_focus(id)])
     }
 
