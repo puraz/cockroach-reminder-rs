@@ -66,8 +66,8 @@ jobs:
             suffix: ''
 
     runs-on: ${{ matrix.os }}
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
