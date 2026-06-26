@@ -387,7 +387,7 @@ impl App {
             ..Default::default()
         });
         self.settings_window = Some(id);
-        task.map(Message::SettingsOpened)
+        Task::batch([task.map(Message::SettingsOpened), window::gain_focus(id)])
     }
 
     // --- Tray helpers ---
