@@ -231,27 +231,35 @@ mod imp {
             Err(_) => return frames,
         };
 
-        if let Ok(true) = conn.xinerama_is_active() {
-            if let Ok(reply) = conn.xinerama_query_screens() {
-                for si in reply.screen_info {
-                    frames.push(ScreenFrame {
-                        x: si.x_org as f64,
-                        y: si.y_org as f64,
-                        width: si.width as f64,
-                        height: si.height as f64,
-                    });
+        // Xinerama multi-monitor query (cookie → reply chain).
+        if let Ok(cookie) = conn.xinerama_is_active() {
+            if let Ok(reply) = cookie.reply() {
+                if reply.state {
+                    if let Ok(cookie) = conn.xinerama_query_screens() {
+                        if let Ok(reply) = cookie.reply() {
+                            for si in reply.screen_info {
+                                frames.push(ScreenFrame {
+                                    x: si.x_org as f64,
+                                    y: si.y_org as f64,
+                                    width: si.width as f64,
+                                    height: si.height as f64,
+                                });
+                            }
+                        }
+                    }
                 }
             }
         }
 
         if frames.is_empty() {
             // Fallback: use the root window geometry.
-            if let Ok(setup) = conn.setup().roots.get(_screen_num).ok_or(()) {
+            let setup = conn.setup();
+            if let Some(screen) = setup.roots.get(_screen_num) {
                 frames.push(ScreenFrame {
                     x: 0.0,
                     y: 0.0,
-                    width: setup.width as f64,
-                    height: setup.height as f64,
+                    width: screen.width_in_pixels as f64,
+                    height: screen.height_in_pixels as f64,
                 });
             }
         }
