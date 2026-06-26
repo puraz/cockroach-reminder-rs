@@ -234,7 +234,7 @@ mod imp {
         // Xinerama multi-monitor query (cookie → reply chain).
         if let Ok(cookie) = conn.xinerama_is_active() {
             if let Ok(reply) = cookie.reply() {
-                if reply.state {
+                if reply.state != 0 {
                     if let Ok(cookie) = conn.xinerama_query_screens() {
                         if let Ok(reply) = cookie.reply() {
                             for si in reply.screen_info {
@@ -286,26 +286,30 @@ mod imp {
         let screen_idx = _screen_index.min(setup.roots.len().saturating_sub(1));
         let root = setup.roots[screen_idx].root;
 
-        // Intern atoms.
-        let ok = |r: Result<x11rb::cookie::Cookie<x11rb::protocol::xproto::InternAtomReply>, _>| {
-            r.ok().and_then(|c| c.reply().ok()).map(|a| a.atom)
+        // Intern atoms (inline, no closure – avoids complex type inference).
+        let state_atom = match conn.intern_atom(false, b"_NET_WM_STATE") {
+            Ok(c) => match c.reply() {
+                Ok(r) => r.atom,
+                Err(_) => return,
+            },
+            Err(_) => return,
         };
-        let state_atom = match ok(conn.intern_atom(false, b"_NET_WM_STATE")) {
-            Some(a) => a,
-            None => return,
-        };
-        let above_atom = match ok(conn.intern_atom(false, b"_NET_WM_STATE_ABOVE")) {
-            Some(a) => a,
-            None => return,
+        let above_atom = match conn.intern_atom(false, b"_NET_WM_STATE_ABOVE") {
+            Ok(c) => match c.reply() {
+                Ok(r) => r.atom,
+                Err(_) => return,
+            },
+            Err(_) => return,
         };
 
-        // Send ClientMessage to add _NET_WM_STATE_ABOVE.
+        // ClientMessageEvent::new(format, window, type_, data)
+        // data is [u32; 5] which implements Into<ClientMessageData>.
         let event = x11rb::protocol::xproto::ClientMessageEvent::new(
             32,
+            window,
             state_atom,
-            [2, above_atom, 0, 0, 0], // _NET_WM_STATE_ADD
+            [2u32, above_atom, 0, 0, 0], // _NET_WM_STATE_ADD
         );
-        // ClientMessageEvent::new returns the event directly (x11rb 0.13).
         let _ = conn.send_event(
             false,
             root,
