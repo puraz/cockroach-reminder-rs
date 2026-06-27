@@ -16,6 +16,7 @@ mod overlay;
 mod platform;
 mod timer;
 mod tray;
+mod settings_ui;
 
 use cockroach::{AnimConfig, Cockroach};
 use config::Settings;
@@ -24,9 +25,7 @@ use timer::{Phase, Timer, Transition};
 use tray::{Tray, TrayCommand};
 
 use iced::widget::image;
-use iced::widget::{
-    button, canvas, checkbox, column, container, row, scrollable, slider, text, Space,
-};
+use iced::widget::{canvas, Space};
 use iced::{window, Color, Element, Length, Subscription, Task, Theme};
 use std::time::{Duration, Instant};
 
@@ -435,209 +434,11 @@ impl App {
     // --- Settings UI ---
 
     fn view_settings(&self) -> Element<'_, Message> {
-        let s = &self.edit;
-
-        let header = column![
-            text("🪳 蟑螂提醒").size(24).color(Color::WHITE),
-            text("定时休息，保护健康！")
-                .size(13)
-                .color(color(0x88, 0x88, 0x88)),
-        ]
-        .spacing(4)
-        .align_x(iced::Alignment::Center)
-        .width(Length::Fill);
-
-        let timer_section = section(
-            "⏱ 计时器",
-            column![
-                slider_row(
-                    "休息间隔",
-                    slider(1..=120, s.interval_minutes, Message::IntervalChanged).into(),
-                    format!("{} 分钟", s.interval_minutes),
-                ),
-                slider_row(
-                    "显示时长",
-                    slider(3..=120, s.duration_seconds, Message::DurationChanged).into(),
-                    format!("{} 秒", s.duration_seconds),
-                ),
-                slider_row(
-                    "蟑螂数量",
-                    slider(1..=50, s.cockroach_count, Message::CountChanged).into(),
-                    format!("{}", s.cockroach_count),
-                ),
-            ]
-            .spacing(14),
-        );
-
-        let fast_prob = (s.fast_speed_probability * 100.0).round() as u32;
-        let anim_section = section(
-            "🎨 动画",
-            column![
-                slider_row(
-                    "蟑螂大小",
-                    slider(10.0..=80.0, s.cockroach_size_percent, Message::SizeChanged)
-                        .step(1.0f32)
-                        .into(),
-                    format!("{}%", s.cockroach_size_percent.round() as u32),
-                ),
-                slider_row(
-                    "移动速度",
-                    slider(5.0..=50.0, s.movement_percent, Message::SpeedChanged)
-                        .step(0.5f32)
-                        .into(),
-                    format!("{:.1}%", s.movement_percent),
-                ),
-                slider_row(
-                    "快速蟑螂概率",
-                    slider(0..=100, fast_prob, Message::FastProbChanged)
-                        .step(5u32)
-                        .into(),
-                    format!("{}%", fast_prob),
-                ),
-            ]
-            .spacing(14),
-        );
-
-        let behavior_section = section(
-            "⚙ 行为",
-            column![
-                checkbox(s.auto_start)
-                    .label("启动应用时自动开启计时")
-                    .on_toggle(Message::AutoStartToggled),
-                checkbox(s.launch_at_login)
-                    .label("开机自启动")
-                    .on_toggle(Message::LaunchAtLoginToggled),
-                checkbox(s.show_notifications)
-                    .label("显示系统通知")
-                    .on_toggle(Message::ShowNotificationsToggled),
-            ]
-            .spacing(12),
-        );
-
-        let pause_label = if self.timer.phase == Phase::Running {
-            "⏸ 暂停计时"
-        } else {
-            "▶ 恢复计时"
-        };
-
-        let actions = row![
-            button(text("🪳 立即休息 (召唤蟑螂)").center())
-                .on_press(Message::TestBreak)
-                .style(button::danger)
-                .width(Length::Fill),
-            button(text(pause_label).center())
-                .on_press(Message::TogglePause)
-                .style(button::secondary)
-                .width(Length::Fill),
-        ]
-        .spacing(10);
-
-        let status_text = self.status_line();
-        let status = container(text(status_text).size(14))
-            .padding([10, 16])
-            .width(Length::Fill)
-            .style(section_style);
-
-        let save = button(text("保存设置").center().size(15).width(Length::Fill))
-            .on_press(Message::SaveSettings)
-            .style(button::primary)
-            .width(Length::Fill)
-            .padding(12);
-
-        let content = column![
-            header,
-            timer_section,
-            anim_section,
-            behavior_section,
-            actions,
-            status,
-            save,
-        ]
-        .spacing(16)
-        .max_width(520)
-        .padding(24);
-
-        let scroll = scrollable(
-            container(content)
-                .center_x(Length::Fill)
-                .width(Length::Fill),
-        );
-
-        container(scroll)
-            .width(Length::Fill)
-            .height(Length::Fill)
-            .style(|_theme: &Theme| container::Style {
-                background: Some(color(0x1a, 0x1a, 0x2e).into()),
-                text_color: Some(color(0xe0, 0xe0, 0xe0)),
-                ..container::Style::default()
-            })
-            .into()
+        settings_ui::view(&self.edit, self.timer.phase, &self.timer.formatted())
     }
 
-    fn status_line(&self) -> String {
-        let f = self.timer.formatted();
-        match self.timer.phase {
-            Phase::Running => format!("计时中 — 下次休息还有 {f}"),
-            Phase::Break => format!("休息时间！还剩 {f}"),
-            Phase::Paused => format!("已暂停 — 剩余 {f}"),
-            Phase::Idle => "计时器已停止".to_string(),
-        }
-    }
 }
 
-// --- Small UI helpers ---
-
-fn color(r: u8, g: u8, b: u8) -> Color {
-    Color::from_rgb8(r, g, b)
-}
-
-fn section_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(color(0x16, 0x21, 0x3e).into()),
-        border: iced::Border {
-            color: color(0x0f, 0x34, 0x60),
-            width: 1.0,
-            radius: 12.0.into(),
-        },
-        text_color: Some(color(0xe0, 0xe0, 0xe0)),
-        ..container::Style::default()
-    }
-}
-
-fn section<'a>(title: &'a str, body: impl Into<Element<'a, Message>>) -> Element<'a, Message> {
-    container(
-        column![
-            text(title).size(15).color(color(0xe9, 0x45, 0x60)),
-            body.into(),
-        ]
-        .spacing(14),
-    )
-    .padding([18, 20])
-    .width(Length::Fill)
-    .style(section_style)
-    .into()
-}
-
-fn slider_row<'a>(
-    label: &'a str,
-    slider: Element<'a, Message>,
-    value: String,
-) -> Element<'a, Message> {
-    column![
-        text(label).size(13).color(color(0xaa, 0xaa, 0xaa)),
-        row![
-            slider,
-            text(value)
-                .size(14)
-                .color(color(0xe9, 0x45, 0x60))
-                .width(Length::Fixed(64.0)),
-        ]
-        .spacing(12)
-        .align_y(iced::Alignment::Center),
-    ]
-    .spacing(6)
-    .into()
-}
 
 fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new()
