@@ -11,7 +11,7 @@ name = "cockroach-reminder"
 path = "src/main.rs"
 
 [dependencies]
-iced = { version = "0.14", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "tokio", "wgpu"] }
+iced = { version = "0.14", default-features = false, features = ["advanced", "canvas", "crisp", "image-without-codecs", "tokio", "wayland", "wgpu", "x11"] }
 tray-icon = "0.19"
 notify-rust = "4"
 serde = { version = "1", features = ["derive"] }
