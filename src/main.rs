@@ -14,9 +14,9 @@ mod config;
 mod constants;
 mod overlay;
 mod platform;
+mod settings_ui;
 mod timer;
 mod tray;
-mod settings_ui;
 
 use cockroach::{AnimConfig, Cockroach};
 use config::Settings;
@@ -24,10 +24,14 @@ use overlay::{Overlay, OverlayCanvas, SpriteFrame};
 use timer::{Phase, Timer, Transition};
 use tray::{Tray, TrayCommand};
 
-use iced::widget::image;
+use ::image::imageops::FilterType;
+use iced::widget::image as iced_image;
 use iced::widget::{canvas, Space};
 use iced::{window, Color, Element, Length, Subscription, Task, Theme};
+use rand::Rng;
 use std::time::{Duration, Instant};
+
+const MAX_SPRITE_FRAME_WIDTH: u32 = 640;
 
 fn main() -> iced::Result {
     iced::daemon(App::new, App::update, App::view)
@@ -39,11 +43,12 @@ fn main() -> iced::Result {
         .run()
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 enum Message {
     Tick,
     Anim(Instant),
     PollTray,
+    FramesLoaded(Vec<SpriteFrame>),
 
     SettingsOpened(window::Id),
     WindowClosed(window::Id),
@@ -71,7 +76,8 @@ struct App {
     edit: Settings,
     timer: Timer,
     tray: Option<Tray>,
-    frames: Vec<SpriteFrame>,
+    frames: Option<Vec<SpriteFrame>>,
+    pending_break: bool,
 
     settings_window: Option<window::Id>,
     overlays: Vec<Overlay>,
@@ -85,8 +91,6 @@ impl App {
         // Menu-bar-only app (no dock icon), matching `app.dock.hide()`.
         platform::hide_dock();
 
-        let frames = load_sprite_frames(&constants::FRAME_BYTES);
-
         // Auto-start the timer if configured.
         if settings.auto_start {
             timer.start();
@@ -97,7 +101,8 @@ impl App {
             settings,
             timer,
             tray: None,
-            frames,
+            frames: None,
+            pending_break: false,
             settings_window: None,
             overlays: Vec::new(),
             anim_start: Instant::now(),
@@ -106,7 +111,7 @@ impl App {
         let (status, toggle_label, toggle_enabled, tooltip) = app.tray_labels();
         app.tray = Tray::new(&status, &toggle_label, toggle_enabled, &tooltip);
 
-        (app, Task::none())
+        (app, load_frames_task())
     }
 
     fn title(&self, window: window::Id) -> String {
@@ -134,7 +139,7 @@ impl App {
             iced::time::every(Duration::from_millis(150)).map(|_| Message::PollTray),
             window::close_events().map(Message::WindowClosed),
         ];
-        if !self.overlays.is_empty() {
+        if self.any_active_overlay() {
             subs.push(iced::time::every(Duration::from_millis(16)).map(Message::Anim));
         }
         Subscription::batch(subs)
@@ -176,6 +181,18 @@ impl App {
                 }
                 None => Task::none(),
             },
+
+            Message::FramesLoaded(frames) => {
+                self.frames = Some(frames);
+                if self.pending_break && self.timer.phase == Phase::Break {
+                    self.pending_break = false;
+                    let task = self.spawn_overlays();
+                    self.refresh_tray();
+                    task
+                } else {
+                    Task::none()
+                }
+            }
 
             Message::SettingsOpened(id) => {
                 self.settings_window = Some(id);
@@ -262,10 +279,15 @@ impl App {
     fn view(&self, window: window::Id) -> Element<'_, Message> {
         if Some(window) == self.settings_window {
             self.view_settings()
-        } else if let Some(ov) = self.overlays.iter().find(|o| o.id == window) {
+        } else if let Some((ov, frames)) = self
+            .overlays
+            .iter()
+            .find(|o| o.id == window && o.active)
+            .zip(self.frames.as_deref())
+        {
             canvas(OverlayCanvas {
                 overlay: ov,
-                frames: &self.frames,
+                frames,
             })
             .width(Length::Fill)
             .height(Length::Fill)
@@ -288,9 +310,29 @@ impl App {
         }
     }
 
-    /// Open one transparent overlay per display and seed it with `cockroach_count` roaches.
+    fn any_active_overlay(&self) -> bool {
+        self.overlays.iter().any(|ov| ov.active)
+    }
+
+    fn seed_cockroaches(
+        count: u32,
+        cfg: AnimConfig,
+        rng: &mut impl Rng,
+        width: f32,
+        height: f32,
+    ) -> Vec<Cockroach> {
+        (0..count)
+            .map(|_| Cockroach::new(rng, cfg, width, height))
+            .collect()
+    }
+
+    /// Show one transparent overlay per display and seed it with `cockroach_count` roaches.
     fn spawn_overlays(&mut self) -> Task<Message> {
-        let mut tasks = self.close_overlays_tasks();
+        if self.frames.is_none() {
+            self.pending_break = true;
+            return Task::none();
+        }
+        self.pending_break = false;
 
         // Optional system notification (silent), matching the original.
         if self.settings.show_notifications {
@@ -307,18 +349,44 @@ impl App {
             });
         }
 
+        self.show_overlays(screens)
+    }
+
+    fn show_overlays(&mut self, screens: Vec<platform::ScreenFrame>) -> Task<Message> {
         self.anim_start = Instant::now();
         let cfg = self.anim_config();
         let count = self.settings.cockroach_count;
         let mut rng = rand::thread_rng();
+        let mut tasks = Vec::new();
+        let screen_count = screens.len();
 
         for (i, sf) in screens.into_iter().enumerate() {
             let w = sf.width as f32;
             let h = sf.height as f32;
 
-            let cockroaches = (0..count)
-                .map(|_| Cockroach::new(&mut rng, cfg, w, h))
-                .collect();
+            if let Some(ov) = self.overlays.get_mut(i) {
+                ov.width = w;
+                ov.height = h;
+                ov.active = true;
+                ov.cockroaches = Self::seed_cockroaches(count, cfg, &mut rng, w, h);
+                let id = ov.id;
+                tasks.push(window::move_to::<Message>(
+                    id,
+                    iced::Point::new(sf.x as f32, sf.y as f32),
+                ));
+                tasks.push(window::resize::<Message>(id, iced::Size::new(w, h)));
+                tasks.push(window::set_mode::<Message>(id, window::Mode::Windowed));
+                tasks.push(window::set_level::<Message>(id, window::Level::AlwaysOnTop));
+                tasks.push(window::run(id, move |window| {
+                    if let Ok(handle) = window.window_handle() {
+                        platform::configure_overlay(&handle.as_raw(), i);
+                    }
+                    Message::Noop
+                }));
+                continue;
+            }
+
+            let cockroaches = Self::seed_cockroaches(count, cfg, &mut rng, w, h);
 
             let (id, open_task) = window::open(window::Settings {
                 size: iced::Size::new(w, h),
@@ -336,6 +404,7 @@ impl App {
                 id,
                 width: w,
                 height: h,
+                active: true,
                 cockroaches,
             });
 
@@ -351,21 +420,22 @@ impl App {
             }));
         }
 
+        for ov in self.overlays.iter_mut().skip(screen_count) {
+            ov.active = false;
+            ov.cockroaches.clear();
+            tasks.push(window::set_mode::<Message>(ov.id, window::Mode::Hidden));
+        }
+
         Task::batch(tasks)
     }
 
     fn close_overlays(&mut self) -> Task<Message> {
-        Task::batch(self.close_overlays_tasks())
-    }
-
-    fn close_overlays_tasks(&mut self) -> Vec<Task<Message>> {
-        let tasks = self
-            .overlays
-            .iter()
-            .map(|ov| window::close::<Message>(ov.id))
-            .collect();
-        self.overlays.clear();
-        tasks
+        let tasks = self.overlays.iter_mut().map(|ov| {
+            ov.active = false;
+            ov.cockroaches.clear();
+            window::set_mode::<Message>(ov.id, window::Mode::Hidden)
+        });
+        Task::batch(tasks)
     }
 
     // --- Settings window ---
@@ -382,7 +452,7 @@ impl App {
             transparent: false,
             decorations: true,
             exit_on_close_request: true,
-            icon: window::icon::from_file_data(constants::APP_ICON_BYTES, None).ok(),
+            icon: app_icon(),
             ..Default::default()
         });
         self.settings_window = Some(id);
@@ -436,15 +506,33 @@ impl App {
     fn view_settings(&self) -> Element<'_, Message> {
         settings_ui::view(&self.edit, self.timer.phase, &self.timer.formatted())
     }
-
 }
-
 
 fn notify(title: &str, body: &str) {
     let _ = notify_rust::Notification::new()
         .summary(title)
         .body(body)
         .show();
+}
+
+fn app_icon() -> Option<window::Icon> {
+    let img = ::image::load_from_memory(constants::APP_ICON_BYTES)
+        .ok()?
+        .into_rgba8();
+    let (width, height) = img.dimensions();
+    window::icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
+fn load_frames_task() -> Task<Message> {
+    let (sender, receiver) = iced::futures::channel::oneshot::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(load_sprite_frames(&constants::FRAME_BYTES));
+    });
+
+    Task::perform(
+        async move { receiver.await.unwrap_or_default() },
+        Message::FramesLoaded,
+    )
 }
 
 fn load_sprite_frames(bytes: &[&[u8]]) -> Vec<SpriteFrame> {
@@ -471,15 +559,29 @@ fn load_sprite_frames(bytes: &[&[u8]]) -> Vec<SpriteFrame> {
         .iter()
         .map(|img| {
             let (body_x, body_y) = alpha_centroid(img);
-            let crop = ::image::imageops::crop_imm(img, global_min_x, global_min_y, crop_w, crop_h)
-                .to_image();
+            let mut crop =
+                ::image::imageops::crop_imm(img, global_min_x, global_min_y, crop_w, crop_h)
+                    .to_image();
+            let scale = if crop_w > MAX_SPRITE_FRAME_WIDTH {
+                MAX_SPRITE_FRAME_WIDTH as f32 / crop_w as f32
+            } else {
+                1.0
+            };
+
+            if scale < 1.0 {
+                let resized_w = MAX_SPRITE_FRAME_WIDTH;
+                let resized_h = (crop_h as f32 * scale).round().max(1.0) as u32;
+                crop = ::image::imageops::resize(&crop, resized_w, resized_h, FilterType::Lanczos3);
+            }
+
+            let (frame_w, frame_h) = crop.dimensions();
 
             SpriteFrame {
-                handle: image::Handle::from_rgba(crop_w, crop_h, crop.into_raw()),
-                width: crop_w as f32,
-                height: crop_h as f32,
-                body_anchor_x: body_x - global_min_x as f32,
-                body_anchor_y: body_y - global_min_y as f32,
+                handle: iced_image::Handle::from_rgba(frame_w, frame_h, crop.into_raw()),
+                width: frame_w as f32,
+                height: frame_h as f32,
+                body_anchor_x: (body_x - global_min_x as f32) * scale,
+                body_anchor_y: (body_y - global_min_y as f32) * scale,
             }
         })
         .collect()
@@ -525,4 +627,73 @@ fn alpha_centroid(img: &::image::RgbaImage) -> (f32, f32) {
         (weighted_x / total_alpha) as f32,
         (weighted_y / total_alpha) as f32,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_app() -> App {
+        let settings = Settings {
+            cockroach_count: 3,
+            show_notifications: false,
+            ..Settings::default()
+        };
+
+        App {
+            edit: settings.clone(),
+            settings: settings.clone(),
+            timer: Timer::new(settings.interval_minutes, settings.duration_seconds),
+            tray: None,
+            frames: Some(vec![SpriteFrame {
+                handle: iced_image::Handle::from_rgba(1, 1, vec![255, 255, 255, 255]),
+                width: 1.0,
+                height: 1.0,
+                body_anchor_x: 0.5,
+                body_anchor_y: 0.5,
+            }]),
+            pending_break: false,
+            settings_window: None,
+            overlays: Vec::new(),
+            anim_start: Instant::now(),
+        }
+    }
+
+    #[test]
+    fn reuses_overlay_windows_between_breaks() {
+        let mut app = test_app();
+        let screens = vec![platform::ScreenFrame {
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+        }];
+
+        let _ = app.show_overlays(screens.clone());
+        let first_ids: Vec<_> = app.overlays.iter().map(|ov| ov.id).collect();
+        assert_eq!(app.overlays.len(), 1);
+        assert!(app.any_active_overlay());
+
+        let _ = app.close_overlays();
+        assert_eq!(app.overlays.len(), 1);
+        assert!(!app.any_active_overlay());
+        assert!(app.overlays[0].cockroaches.is_empty());
+
+        let _ = app.show_overlays(screens);
+        let second_ids: Vec<_> = app.overlays.iter().map(|ov| ov.id).collect();
+        assert_eq!(second_ids, first_ids);
+        assert!(app.any_active_overlay());
+        assert_eq!(app.overlays[0].cockroaches.len(), 3);
+    }
+
+    #[test]
+    fn sprite_frames_are_capped_to_runtime_size() {
+        let frames = load_sprite_frames(&constants::FRAME_BYTES);
+
+        assert_eq!(frames.len(), constants::TOTAL_FRAMES);
+        assert!(frames
+            .iter()
+            .all(|frame| frame.width <= MAX_SPRITE_FRAME_WIDTH as f32));
+        assert!(frames.iter().all(|frame| frame.height > 0.0));
+    }
 }

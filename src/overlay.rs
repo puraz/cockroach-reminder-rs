@@ -14,9 +14,11 @@ pub struct Overlay {
     pub id: iced::window::Id,
     pub width: f32,
     pub height: f32,
+    pub active: bool,
     pub cockroaches: Vec<Cockroach>,
 }
 
+#[derive(Clone)]
 pub struct SpriteFrame {
     pub handle: image::Handle,
     pub width: f32,
