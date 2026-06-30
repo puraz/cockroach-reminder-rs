@@ -28,6 +28,7 @@ use iced::widget::image;
 use iced::widget::{canvas, Space};
 use iced::{window, Color, Element, Length, Subscription, Task, Theme};
 use std::time::{Duration, Instant};
+use constants::MAX_SPRITE_WIDTH;
 
 fn main() -> iced::Result {
     iced::daemon(App::new, App::update, App::view)
@@ -72,10 +73,13 @@ struct App {
     timer: Timer,
     tray: Option<Tray>,
     frames: Vec<SpriteFrame>,
-
     settings_window: Option<window::Id>,
     overlays: Vec<Overlay>,
     anim_start: Instant,
+    /// When true, overlays are being closed before re-opening on the next opportunity.
+    /// This prevents old and new overlay GPU resources from briefly co-existing,
+    /// which can accumulate to 2 GB+ over hours of break cycles.
+    pending_reopen: bool,
 }
 
 impl App {
@@ -101,6 +105,7 @@ impl App {
             settings_window: None,
             overlays: Vec::new(),
             anim_start: Instant::now(),
+            pending_reopen: false,
         };
 
         let (status, toggle_label, toggle_enabled, tooltip) = app.tray_labels();
@@ -144,14 +149,13 @@ impl App {
         match message {
             Message::Tick => {
                 let task = match self.timer.tick() {
-                    Some(Transition::EnteredBreak) => self.spawn_overlays(),
+                    Some(Transition::EnteredBreak) => self.enter_break(),
                     Some(Transition::EnteredRunning) => self.close_overlays(),
                     None => Task::none(),
                 };
                 self.refresh_tray();
                 task
             }
-
             Message::Anim(now) => {
                 if self.timer.phase == Phase::Break {
                     let elapsed_ms = now.duration_since(self.anim_start).as_secs_f32() * 1000.0;
@@ -185,11 +189,18 @@ impl App {
             Message::WindowClosed(id) => {
                 if Some(id) == self.settings_window {
                     self.settings_window = None;
+                    return Task::none();
                 }
                 self.overlays.retain(|ov| ov.id != id);
+
+                // If we were waiting to re-open, do it now that old windows are gone.
+                if self.overlays.is_empty() && self.pending_reopen {
+                    self.pending_reopen = false;
+                    return self.open_overlays();
+                }
                 Task::none()
             }
-
+            
             Message::IntervalChanged(v) => {
                 self.edit.interval_minutes = v;
                 Task::none()
@@ -236,10 +247,9 @@ impl App {
                 self.refresh_tray();
                 Task::none()
             }
-
             Message::TestBreak => {
                 self.timer.trigger_break();
-                let task = self.spawn_overlays();
+                let task = self.enter_break();
                 self.refresh_tray();
                 task
             }
@@ -288,14 +298,28 @@ impl App {
         }
     }
 
-    /// Open one transparent overlay per display and seed it with `cockroach_count` roaches.
-    fn spawn_overlays(&mut self) -> Task<Message> {
-        let mut tasks = self.close_overlays_tasks();
-
-        // Optional system notification (silent), matching the original.
+    /// Enter break phase: close existing overlays first (if any), then open new ones
+    /// only after old windows are confirmed closed. This prevents GPU resource buildup
+    /// from old and new overlay windows co-existing.
+    fn enter_break(&mut self) -> Task<Message> {
         if self.settings.show_notifications {
             notify("🪳 休息时间到！", "该放松一下眼睛了！看，蟑螂们出来了...");
         }
+
+        if self.overlays.is_empty() {
+            // No old overlays to close — open directly.
+            self.open_overlays()
+        } else {
+            // Close old overlays first; open_overlays() is called from
+            // WindowClosed once all windows are gone.
+            self.pending_reopen = true;
+            self.close_overlays()
+        }
+    }
+
+    /// Open one transparent overlay per display and seed it with `cockroach_count` roaches.
+    fn open_overlays(&mut self) -> Task<Message> {
+        let mut tasks: Vec<Task<Message>> = Vec::new();
 
         let mut screens = platform::screen_frames();
         if screens.is_empty() {
@@ -339,8 +363,7 @@ impl App {
                 cockroaches,
             });
 
-            // Once opened, configure the overlay via the native window handle
-            // (platform-specific: macOS uses objc2, Windows uses Win32, Linux uses X11).
+            // Once opened, configure the overlay via the native window handle.
             tasks.push(open_task.then(move |id| {
                 window::run(id, move |w| {
                     if let Ok(handle) = w.window_handle() {
@@ -355,18 +378,15 @@ impl App {
     }
 
     fn close_overlays(&mut self) -> Task<Message> {
-        Task::batch(self.close_overlays_tasks())
-    }
-
-    fn close_overlays_tasks(&mut self) -> Vec<Task<Message>> {
-        let tasks = self
+        let tasks: Vec<Task<Message>> = self
             .overlays
             .iter()
             .map(|ov| window::close::<Message>(ov.id))
             .collect();
         self.overlays.clear();
-        tasks
+        Task::batch(tasks)
     }
+
 
     // --- Settings window ---
 
@@ -448,9 +468,22 @@ fn notify(title: &str, body: &str) {
 }
 
 fn load_sprite_frames(bytes: &[&[u8]]) -> Vec<SpriteFrame> {
+    // Decode and resize each frame. The source PNGs are 1920×1080; the cockroach
+    // art only occupies ~842×358 even at full resolution. Scaling to MAX_SPRITE_WIDTH
+    // (600px) cuts peak decoded memory from ~103 MB to ~10 MB and permanent GPU
+    // texture memory from ~15 MB to ~1.5 MB, with no visible quality difference.
     let images: Vec<::image::RgbaImage> = bytes
         .iter()
-        .map(|bytes| ::image::load_from_memory(bytes).unwrap().into_rgba8())
+        .map(|bytes| {
+            let full = ::image::load_from_memory(bytes).unwrap().into_rgba8();
+            let (w, h) = (full.width(), full.height());
+            if w <= MAX_SPRITE_WIDTH {
+                return full;
+            }
+            let new_w = MAX_SPRITE_WIDTH;
+            let new_h = (h as f64 * (new_w as f64 / w as f64)) as u32;
+            ::image::imageops::resize(&full, new_w, new_h, ::image::imageops::FilterType::Lanczos3)
+        })
         .collect();
 
     let (global_min_x, global_min_y, global_max_x, global_max_y) =

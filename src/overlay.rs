@@ -3,6 +3,7 @@
 //! every window receives the full `count`).
 
 use crate::cockroach::Cockroach;
+use crate::constants::MAX_SPRITE_WIDTH;
 use crate::Message;
 use iced::mouse;
 use iced::widget::canvas::{Frame, Geometry, Image, Program};
@@ -50,19 +51,18 @@ impl<'a> Program<Message> for OverlayCanvas<'a> {
             }
             let sprite = &self.frames[roach.cur_frame];
             let w = roach.el_width(bounds.width);
-            let h = roach.el_height(bounds.width);
-            let scale_x = w / 1920.0;
-            let scale_y = h / 1080.0;
+            // Scale maps sprite source pixels (resized to MAX_SPRITE_WIDTH) to display pixels.
+            let scale = w / MAX_SPRITE_WIDTH as f32;
 
             frame.with_save(|f| {
                 f.translate(Vector::new(roach.center_x, roach.center_y));
                 f.rotate(roach.angle_deg().to_radians());
                 let rect = Rectangle::new(
                     Point::new(
-                        -sprite.body_anchor_x * scale_x,
-                        -sprite.body_anchor_y * scale_y,
+                        -sprite.body_anchor_x * scale,
+                        -sprite.body_anchor_y * scale,
                     ),
-                    Size::new(sprite.width * scale_x, sprite.height * scale_y),
+                    Size::new(sprite.width * scale, sprite.height * scale),
                 );
                 f.draw_image(rect, Image::new(sprite.handle.clone()));
             });

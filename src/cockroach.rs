@@ -1,6 +1,6 @@
 //! A single crawling cockroach. Physics ported 1:1 from `src/renderer/overlay/overlay.js`.
 
-use crate::constants::{FRAME_ASPECT, TOTAL_FRAMES};
+use crate::constants::TOTAL_FRAMES;
 use rand::Rng;
 use std::f32::consts::PI;
 
@@ -71,10 +71,6 @@ impl Cockroach {
     /// Displayed cockroach width in pixels (`size_percent` vw, like the original CSS).
     pub fn el_width(&self, width: f32) -> f32 {
         self.cfg.size_percent / 100.0 * width
-    }
-
-    pub fn el_height(&self, width: f32) -> f32 {
-        self.el_width(width) * FRAME_ASPECT
     }
 
     pub fn angle_deg(&self) -> f32 {

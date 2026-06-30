@@ -4,9 +4,6 @@
 /// Number of animation frames per cockroach (frames `001_1.1.0.png` .. `001_1.1.12.png`).
 pub const TOTAL_FRAMES: usize = 13;
 
-/// Aspect ratio of a frame image (1920x1080 -> height = width * 0.5625).
-pub const FRAME_ASPECT: f32 = 1080.0 / 1920.0;
-
 /// Embedded frame image bytes, indexed `0..TOTAL_FRAMES`.
 ///
 /// Embedding keeps the binary self-contained so the overlay works regardless of
@@ -33,3 +30,8 @@ pub const TRAY_ICON_BYTES: &[u8] = include_bytes!("../assets/trayIconTemplate@2x
 
 /// Window icon PNG bytes.
 pub const APP_ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
+
+/// Max pixel width for decoded sprite frames. The original PNGs are 1920×1080,
+/// but the cockroach content only occupies ~842×358 (see alpha_bounds). Scaling
+/// to 600px wide reduces permanent RGBA memory from ~15 MB to ~1.5 MB.
+pub const MAX_SPRITE_WIDTH: u32 = 600;
