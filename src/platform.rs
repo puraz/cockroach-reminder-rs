@@ -341,4 +341,6 @@ mod imp {
 // Public API
 // ---------------------------------------------------------------------------
 
-pub use imp::{activate_app, configure_overlay, hide_dock, screen_frames};
+#[cfg(target_os = "macos")]
+pub use imp::activate_app;
+pub use imp::{configure_overlay, hide_dock, screen_frames};
