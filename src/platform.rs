@@ -85,6 +85,23 @@ mod imp {
     }
 
 
+    /// Activate the app and bring it to front.
+    ///
+    /// Required because this app uses `NSApplicationActivationPolicyAccessory`
+    /// (no dock icon).  Without `activateIgnoringOtherApps:`, windows opened by
+    /// an accessory app stay behind other applications even when
+    /// `makeKeyAndOrderFront:` is called on them.
+    pub fn activate_app() {
+        unsafe {
+            let app: *mut objc2::runtime::AnyObject =
+                msg_send![class!(NSApplication), sharedApplication];
+            if !app.is_null() {
+                let _: () = msg_send![app, activateIgnoringOtherApps: true];
+            }
+        }
+    }
+
+
     /// Enumerate all displays.
     pub fn screen_frames() -> Vec<ScreenFrame> {
         let mut out = Vec::new();
@@ -324,4 +341,4 @@ mod imp {
 // Public API
 // ---------------------------------------------------------------------------
 
-pub use imp::{configure_overlay, hide_dock, screen_frames};
+pub use imp::{activate_app, configure_overlay, hide_dock, screen_frames};

@@ -448,6 +448,8 @@ impl App {
 
     fn open_settings(&mut self) -> Task<Message> {
         if let Some(id) = self.settings_window {
+            #[cfg(target_os = "macos")]
+            platform::activate_app();
             return window::gain_focus::<Message>(id);
         }
         self.edit = self.settings.clone();
@@ -462,6 +464,8 @@ impl App {
             ..Default::default()
         });
         self.settings_window = Some(id);
+        #[cfg(target_os = "macos")]
+        platform::activate_app();
         Task::batch([task.map(Message::SettingsOpened), window::gain_focus(id)])
     }
 
