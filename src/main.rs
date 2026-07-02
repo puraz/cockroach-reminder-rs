@@ -420,10 +420,16 @@ impl App {
             }));
         }
 
-        for ov in self.overlays.iter_mut().skip(screen_count) {
-            ov.active = false;
-            ov.cockroaches.clear();
-            tasks.push(window::set_mode::<Message>(ov.id, window::Mode::Hidden));
+        // Close and remove excess overlays (e.g. when monitor count decreased).
+        // Defensive min() guard: screen_count should always ≤ overlays.len() after the loop
+        // above, but we clamp here to prevent a panic if invariants change in the future.
+        let excess_ids: Vec<_> = self
+            .overlays
+            .drain(screen_count.min(self.overlays.len())..)
+            .map(|ov| ov.id)
+            .collect();
+        for id in excess_ids {
+            tasks.push(window::close::<Message>(id));
         }
 
         Task::batch(tasks)
