@@ -8,6 +8,7 @@ use iced::mouse;
 use iced::widget::canvas::{Frame, Geometry, Image, Program};
 use iced::widget::image;
 use iced::{Point, Rectangle, Renderer, Size, Theme, Vector};
+use std::time::Instant;
 
 /// State for a single display's overlay window.
 pub struct Overlay {
@@ -15,6 +16,7 @@ pub struct Overlay {
     pub width: f32,
     pub height: f32,
     pub active: bool,
+    pub hidden_since: Option<Instant>,
     pub cockroaches: Vec<Cockroach>,
 }
 
