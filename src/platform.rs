@@ -84,7 +84,6 @@ mod imp {
         }
     }
 
-
     /// Activate the app and bring it to front.
     ///
     /// Required because this app uses `NSApplicationActivationPolicyAccessory`
@@ -100,7 +99,6 @@ mod imp {
             }
         }
     }
-
 
     /// Enumerate all displays.
     pub fn screen_frames() -> Vec<ScreenFrame> {
@@ -218,12 +216,7 @@ mod imp {
         unsafe {
             // Ensure the window is topmost (belt-and-suspenders; winit usually
             // sets WS_EX_TOPMOST for AlwaysOnTop, but this guarantees it).
-            SetWindowPos(
-                hwnd,
-                HWND_TOPMOST,
-                0, 0, 0, 0,
-                SWP_NOMOVE | SWP_NOSIZE,
-            );
+            SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
         }
     }
 }

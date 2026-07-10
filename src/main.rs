@@ -13,14 +13,14 @@ mod cockroach;
 mod config;
 mod constants;
 mod overlay;
+mod overlay_manager;
 mod platform;
 mod settings_ui;
 mod timer;
 mod tray;
 
-use cockroach::{AnimConfig, Cockroach};
 use config::Settings;
-use overlay::{Overlay, OverlayCanvas, SpriteFrame};
+use overlay::{OverlayCanvas, SpriteFrame};
 use timer::{Phase, Timer, Transition};
 use tray::{Tray, TrayCommand};
 
@@ -28,12 +28,10 @@ use ::image::imageops::FilterType;
 use iced::widget::image as iced_image;
 use iced::widget::{canvas, Space};
 use iced::{window, Color, Element, Length, Subscription, Task, Theme};
-use rand::Rng;
+use overlay_manager::OverlayManager;
 use std::time::{Duration, Instant};
 
 const MAX_SPRITE_FRAME_WIDTH: u32 = 640;
-const OVERLAY_HOT_CACHE_TTL: Duration = Duration::from_secs(90);
-const OVERLAY_PREWARM_BEFORE_BREAK: i64 = 5_000;
 
 fn main() -> iced::Result {
     iced::daemon(App::new, App::update, App::view)
@@ -79,11 +77,9 @@ struct App {
     timer: Timer,
     tray: Option<Tray>,
     frames: Option<Vec<SpriteFrame>>,
-    pending_break: bool,
 
     settings_window: Option<window::Id>,
-    overlays: Vec<Overlay>,
-    anim_start: Instant,
+    overlay_manager: OverlayManager,
 }
 
 impl App {
@@ -104,10 +100,8 @@ impl App {
             timer,
             tray: None,
             frames: None,
-            pending_break: false,
             settings_window: None,
-            overlays: Vec::new(),
-            anim_start: Instant::now(),
+            overlay_manager: OverlayManager::new(),
         };
 
         let (status, toggle_label, toggle_enabled, tooltip) = app.tray_labels();
@@ -141,7 +135,7 @@ impl App {
             iced::time::every(Duration::from_millis(150)).map(|_| Message::PollTray),
             window::close_events().map(Message::WindowClosed),
         ];
-        if self.any_active_overlay() {
+        if self.overlay_manager.any_active_overlay() {
             subs.push(iced::time::every(Duration::from_millis(16)).map(Message::Anim));
         }
         Subscription::batch(subs)
@@ -152,24 +146,40 @@ impl App {
             Message::Tick => {
                 let mut tasks = Vec::new();
                 match self.timer.tick() {
-                    Some(Transition::EnteredBreak) => tasks.push(self.spawn_overlays()),
-                    Some(Transition::EnteredRunning) => tasks.push(self.close_overlays()),
+                    Some(Transition::EnteredBreak) => {
+                        tasks.push(self.overlay_manager.spawn_overlays(
+                            &self.settings,
+                            &self.timer,
+                            self.frames.as_ref(),
+                        ))
+                    }
+                    Some(Transition::EnteredRunning) => {
+                        tasks.push(self.overlay_manager.close_overlays())
+                    }
                     None => {}
                 }
-                tasks.push(self.maintain_overlays(Instant::now()));
+                tasks.push(self.overlay_manager.maintain_overlays(
+                    &self.timer,
+                    Instant::now(),
+                    &self.settings,
+                ));
                 self.refresh_tray();
                 Task::batch(tasks)
             }
 
             Message::Anim(now) => {
-                if self.timer.phase == Phase::Break {
-                    let elapsed_ms = now.duration_since(self.anim_start).as_secs_f32() * 1000.0;
-                    let mut rng = rand::thread_rng();
-                    for ov in &mut self.overlays {
-                        let (w, h) = (ov.width, ov.height);
-                        for roach in &mut ov.cockroaches {
-                            roach.update(&mut rng, elapsed_ms, w, h);
-                        }
+                let elapsed_ms = now
+                    .duration_since(self.overlay_manager.anim_start)
+                    .as_secs_f32()
+                    * 1000.0;
+                let rng = self
+                    .overlay_manager
+                    .rng
+                    .get_or_insert_with(rand::thread_rng);
+                for ov in &mut self.overlay_manager.overlays {
+                    let (w, h) = (ov.width, ov.height);
+                    for roach in &mut ov.cockroaches {
+                        roach.update(rng, elapsed_ms, w, h);
                     }
                 }
                 Task::none()
@@ -188,9 +198,13 @@ impl App {
 
             Message::FramesLoaded(frames) => {
                 self.frames = Some(frames);
-                if self.pending_break && self.timer.phase == Phase::Break {
-                    self.pending_break = false;
-                    let task = self.spawn_overlays();
+                if self.overlay_manager.pending_break && self.timer.phase == Phase::Break {
+                    self.overlay_manager.pending_break = false;
+                    let task = self.overlay_manager.spawn_overlays(
+                        &self.settings,
+                        &self.timer,
+                        self.frames.as_ref(),
+                    );
                     self.refresh_tray();
                     task
                 } else {
@@ -207,7 +221,7 @@ impl App {
                 if Some(id) == self.settings_window {
                     self.settings_window = None;
                 }
-                self.overlays.retain(|ov| ov.id != id);
+                self.overlay_manager.overlays.retain(|ov| ov.id != id);
                 Task::none()
             }
 
@@ -260,7 +274,11 @@ impl App {
 
             Message::TestBreak => {
                 self.timer.trigger_break();
-                let task = self.spawn_overlays();
+                let task = self.overlay_manager.spawn_overlays(
+                    &self.settings,
+                    &self.timer,
+                    self.frames.as_ref(),
+                );
                 self.refresh_tray();
                 task
             }
@@ -284,6 +302,7 @@ impl App {
         if Some(window) == self.settings_window {
             self.view_settings()
         } else if let Some((ov, frames)) = self
+            .overlay_manager
             .overlays
             .iter()
             .find(|o| o.id == window && o.active)
@@ -299,232 +318,6 @@ impl App {
         } else {
             Space::new().width(Length::Fill).height(Length::Fill).into()
         }
-    }
-
-    // --- Overlay lifecycle ---
-
-    fn anim_config(&self) -> AnimConfig {
-        AnimConfig {
-            size_percent: self.settings.cockroach_size_percent,
-            normal_fps: self.settings.normal_speed_fps,
-            fast_min_fps: self.settings.fast_speed_min_fps,
-            fast_max_fps: self.settings.fast_speed_max_fps,
-            fast_probability: self.settings.fast_speed_probability,
-            movement_percent: self.settings.movement_percent,
-        }
-    }
-
-    fn any_active_overlay(&self) -> bool {
-        self.overlays.iter().any(|ov| ov.active)
-    }
-
-    fn seed_cockroaches(
-        count: u32,
-        cfg: AnimConfig,
-        rng: &mut impl Rng,
-        width: f32,
-        height: f32,
-    ) -> Vec<Cockroach> {
-        (0..count)
-            .map(|_| Cockroach::new(rng, cfg, width, height))
-            .collect()
-    }
-
-    /// Show one transparent overlay per display and seed it with `cockroach_count` roaches.
-    fn spawn_overlays(&mut self) -> Task<Message> {
-        if self.frames.is_none() {
-            self.pending_break = true;
-            return Task::none();
-        }
-        self.pending_break = false;
-
-        // Optional system notification (silent), matching the original.
-        if self.settings.show_notifications {
-            notify("🪳 休息时间到！", "该放松一下眼睛了！看，蟑螂们出来了...");
-        }
-
-        let mut screens = platform::screen_frames();
-        if screens.is_empty() {
-            screens.push(platform::ScreenFrame {
-                x: 0.0,
-                y: 0.0,
-                width: 1920.0,
-                height: 1080.0,
-            });
-        }
-
-        self.show_overlays(screens)
-    }
-
-    fn show_overlays(&mut self, screens: Vec<platform::ScreenFrame>) -> Task<Message> {
-        self.sync_overlays(screens, true)
-    }
-
-    fn prewarm_overlays(&mut self) -> Task<Message> {
-        if self.frames.is_none() || self.any_active_overlay() {
-            return Task::none();
-        }
-
-        let mut screens = platform::screen_frames();
-        if screens.is_empty() {
-            screens.push(platform::ScreenFrame {
-                x: 0.0,
-                y: 0.0,
-                width: 1920.0,
-                height: 1080.0,
-            });
-        }
-
-        self.sync_overlays(screens, false)
-    }
-
-    fn sync_overlays(
-        &mut self,
-        screens: Vec<platform::ScreenFrame>,
-        active: bool,
-    ) -> Task<Message> {
-        self.anim_start = Instant::now();
-        let cfg = self.anim_config();
-        let count = self.settings.cockroach_count;
-        let mut rng = rand::thread_rng();
-        let mut tasks = Vec::new();
-        let screen_count = screens.len();
-
-        for (i, sf) in screens.into_iter().enumerate() {
-            let w = sf.width as f32;
-            let h = sf.height as f32;
-
-            if let Some(ov) = self.overlays.get_mut(i) {
-                ov.width = w;
-                ov.height = h;
-                ov.active = active;
-                ov.hidden_since = (!active).then(Instant::now);
-                ov.cockroaches = if active {
-                    Self::seed_cockroaches(count, cfg, &mut rng, w, h)
-                } else {
-                    Vec::new()
-                };
-                let id = ov.id;
-                tasks.push(window::move_to::<Message>(
-                    id,
-                    iced::Point::new(sf.x as f32, sf.y as f32),
-                ));
-                tasks.push(window::resize::<Message>(id, iced::Size::new(w, h)));
-                let mode = if active {
-                    window::Mode::Windowed
-                } else {
-                    window::Mode::Hidden
-                };
-                tasks.push(window::set_mode::<Message>(id, mode));
-                tasks.push(window::set_level::<Message>(id, window::Level::AlwaysOnTop));
-                tasks.push(window::run(id, move |window| {
-                    if let Ok(handle) = window.window_handle() {
-                        platform::configure_overlay(&handle.as_raw(), i);
-                    }
-                    Message::Noop
-                }));
-                continue;
-            }
-
-            let cockroaches = if active {
-                Self::seed_cockroaches(count, cfg, &mut rng, w, h)
-            } else {
-                Vec::new()
-            };
-
-            let (id, open_task) = window::open(window::Settings {
-                size: iced::Size::new(w, h),
-                position: window::Position::Specific(iced::Point::new(sf.x as f32, sf.y as f32)),
-                transparent: true,
-                decorations: false,
-                resizable: false,
-                level: window::Level::AlwaysOnTop,
-                visible: active,
-                exit_on_close_request: false,
-                ..Default::default()
-            });
-
-            self.overlays.push(Overlay {
-                id,
-                width: w,
-                height: h,
-                active,
-                hidden_since: (!active).then(Instant::now),
-                cockroaches,
-            });
-
-            // Once opened, configure the overlay via the native window handle
-            // (platform-specific: macOS uses objc2, Windows uses Win32, Linux uses X11).
-            tasks.push(open_task.then(move |id| {
-                window::run(id, move |w| {
-                    if let Ok(handle) = w.window_handle() {
-                        platform::configure_overlay(&handle.as_raw(), i);
-                    }
-                    Message::Noop
-                })
-            }));
-        }
-
-        // Close and remove excess overlays (e.g. when monitor count decreased).
-        // Defensive min() guard: screen_count should always ≤ overlays.len() after the loop
-        // above, but we clamp here to prevent a panic if invariants change in the future.
-        let excess_ids: Vec<_> = self
-            .overlays
-            .drain(screen_count.min(self.overlays.len())..)
-            .map(|ov| ov.id)
-            .collect();
-        for id in excess_ids {
-            tasks.push(window::close::<Message>(id));
-        }
-
-        Task::batch(tasks)
-    }
-
-    fn close_overlays(&mut self) -> Task<Message> {
-        self.close_overlays_at(Instant::now())
-    }
-
-    fn close_overlays_at(&mut self, now: Instant) -> Task<Message> {
-        let tasks = self.overlays.iter_mut().map(|ov| {
-            ov.active = false;
-            ov.cockroaches.clear();
-            ov.hidden_since = Some(now);
-            window::set_mode::<Message>(ov.id, window::Mode::Hidden)
-        });
-        Task::batch(tasks)
-    }
-
-    fn maintain_overlays(&mut self, now: Instant) -> Task<Message> {
-        if self.any_active_overlay() {
-            return Task::none();
-        }
-
-        if self.timer.phase == Phase::Running
-            && self.timer.remaining_ms <= OVERLAY_PREWARM_BEFORE_BREAK
-        {
-            return self.prewarm_overlays();
-        }
-
-        self.release_idle_overlays(now)
-    }
-
-    fn release_idle_overlays(&mut self, now: Instant) -> Task<Message> {
-        let mut tasks = Vec::new();
-        let mut i = 0;
-        while i < self.overlays.len() {
-            let should_release = self.overlays[i].hidden_since.is_some_and(|hidden_since| {
-                now.duration_since(hidden_since) >= OVERLAY_HOT_CACHE_TTL
-            });
-
-            if should_release {
-                let ov = self.overlays.remove(i);
-                tasks.push(window::close::<Message>(ov.id));
-            } else {
-                i += 1;
-            }
-        }
-
-        Task::batch(tasks)
     }
 
     // --- Settings window ---
@@ -601,13 +394,6 @@ impl App {
     }
 }
 
-fn notify(title: &str, body: &str) {
-    let _ = notify_rust::Notification::new()
-        .summary(title)
-        .body(body)
-        .show();
-}
-
 fn app_icon() -> Option<window::Icon> {
     let img = ::image::load_from_memory(constants::APP_ICON_BYTES)
         .ok()?
@@ -631,7 +417,11 @@ fn load_frames_task() -> Task<Message> {
 fn load_sprite_frames(bytes: &[&[u8]]) -> Vec<SpriteFrame> {
     let images: Vec<::image::RgbaImage> = bytes
         .iter()
-        .map(|bytes| ::image::load_from_memory(bytes).unwrap().into_rgba8())
+        .map(|bytes| {
+            ::image::load_from_memory(bytes)
+                .expect("embedded sprite frame PNG is valid")
+                .into_rgba8()
+        })
         .collect();
 
     let (global_min_x, global_min_y, global_max_x, global_max_y) =
@@ -725,6 +515,7 @@ fn alpha_centroid(img: &::image::RgbaImage) -> (f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::overlay_manager;
 
     fn test_app() -> App {
         let settings = Settings {
@@ -745,10 +536,8 @@ mod tests {
                 body_anchor_x: 0.5,
                 body_anchor_y: 0.5,
             }]),
-            pending_break: false,
             settings_window: None,
-            overlays: Vec::new(),
-            anim_start: Instant::now(),
+            overlay_manager: OverlayManager::new(),
         }
     }
 
@@ -762,23 +551,35 @@ mod tests {
             height: 1080.0,
         }];
 
-        let _ = app.show_overlays(screens.clone());
-        let first_ids: Vec<_> = app.overlays.iter().map(|ov| ov.id).collect();
-        assert_eq!(app.overlays.len(), 1);
-        assert!(app.any_active_overlay());
+        let _ = app
+            .overlay_manager
+            .show_overlays(&app.settings, screens.clone());
+        let first_ids: Vec<_> = app
+            .overlay_manager
+            .overlays
+            .iter()
+            .map(|ov| ov.id)
+            .collect();
+        assert_eq!(app.overlay_manager.overlays.len(), 1);
+        assert!(app.overlay_manager.any_active_overlay());
 
-        let _ = app.close_overlays();
-        assert_eq!(app.overlays.len(), 1);
-        assert!(!app.any_active_overlay());
-        assert!(app.overlays[0].hidden_since.is_some());
-        assert!(app.overlays[0].cockroaches.is_empty());
+        let _ = app.overlay_manager.close_overlays();
+        assert_eq!(app.overlay_manager.overlays.len(), 1);
+        assert!(!app.overlay_manager.any_active_overlay());
+        assert!(app.overlay_manager.overlays[0].hidden_since.is_some());
+        assert!(app.overlay_manager.overlays[0].cockroaches.is_empty());
 
-        let _ = app.show_overlays(screens);
-        let second_ids: Vec<_> = app.overlays.iter().map(|ov| ov.id).collect();
+        let _ = app.overlay_manager.show_overlays(&app.settings, screens);
+        let second_ids: Vec<_> = app
+            .overlay_manager
+            .overlays
+            .iter()
+            .map(|ov| ov.id)
+            .collect();
         assert_eq!(second_ids, first_ids);
-        assert!(app.any_active_overlay());
-        assert!(app.overlays[0].hidden_since.is_none());
-        assert_eq!(app.overlays[0].cockroaches.len(), 3);
+        assert!(app.overlay_manager.any_active_overlay());
+        assert!(app.overlay_manager.overlays[0].hidden_since.is_none());
+        assert_eq!(app.overlay_manager.overlays[0].cockroaches.len(), 3);
     }
 
     #[test]
@@ -791,16 +592,19 @@ mod tests {
             height: 1080.0,
         }];
 
-        let _ = app.show_overlays(screens);
+        let _ = app.overlay_manager.show_overlays(&app.settings, screens);
         let hidden_at = Instant::now();
-        let _ = app.close_overlays_at(hidden_at);
+        let _ = app.overlay_manager.close_overlays_at(hidden_at);
 
-        let _ =
-            app.release_idle_overlays(hidden_at + OVERLAY_HOT_CACHE_TTL - Duration::from_secs(1));
-        assert_eq!(app.overlays.len(), 1);
+        let _ = app.overlay_manager.release_idle_overlays(
+            hidden_at + overlay_manager::OVERLAY_HOT_CACHE_TTL - Duration::from_secs(1),
+        );
+        assert_eq!(app.overlay_manager.overlays.len(), 1);
 
-        let _ = app.release_idle_overlays(hidden_at + OVERLAY_HOT_CACHE_TTL);
-        assert!(app.overlays.is_empty());
+        let _ = app
+            .overlay_manager
+            .release_idle_overlays(hidden_at + overlay_manager::OVERLAY_HOT_CACHE_TTL);
+        assert!(app.overlay_manager.overlays.is_empty());
     }
 
     #[test]

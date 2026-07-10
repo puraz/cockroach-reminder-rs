@@ -8,9 +8,7 @@ use crate::config::Settings;
 use crate::timer::Phase;
 use crate::Message;
 
-use iced::widget::{
-    button, checkbox, column, container, row, scrollable, slider, text,
-};
+use iced::widget::{button, checkbox, column, container, row, scrollable, slider, text};
 use iced::{Alignment, Color, Element, Length, Theme};
 
 /// Render the settings window content.
@@ -53,9 +51,13 @@ pub fn view(edit: &Settings, phase: Phase, formatted: &str) -> Element<'static, 
         column![
             slider_row(
                 "蟑螂大小",
-                slider(10.0..=80.0, edit.cockroach_size_percent, Message::SizeChanged)
-                    .step(1.0f32)
-                    .into(),
+                slider(
+                    10.0..=80.0,
+                    edit.cockroach_size_percent,
+                    Message::SizeChanged
+                )
+                .step(1.0f32)
+                .into(),
                 format!("{}%", edit.cockroach_size_percent.round() as u32),
             ),
             slider_row(
