@@ -111,3 +111,245 @@ impl Timer {
         self.duration_seconds = seconds;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starts_idle() {
+        let t = Timer::new(25, 15);
+        assert_eq!(t.phase, Phase::Idle);
+        assert_eq!(t.remaining_ms, 0);
+    }
+
+    #[test]
+    fn start_transitions_to_running() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        assert_eq!(t.phase, Phase::Running);
+        assert_eq!(t.remaining_ms, 25 * 60 * 1000);
+    }
+
+    #[test]
+    fn pause_and_resume_cycle() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        t.pause();
+        assert_eq!(t.phase, Phase::Paused);
+        t.resume();
+        assert_eq!(t.phase, Phase::Running);
+    }
+
+    #[test]
+    fn pause_idle_is_noop() {
+        let mut t = Timer::new(25, 15);
+        t.pause();
+        assert_eq!(t.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn resume_running_is_noop() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        t.resume();
+        assert_eq!(t.phase, Phase::Running);
+    }
+
+    #[test]
+    fn tick_idle_returns_none_and_does_not_change_state() {
+        let mut t = Timer::new(25, 15);
+        assert!(t.tick().is_none());
+        assert_eq!(t.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn tick_paused_does_not_decrement() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        let before = t.remaining_ms;
+        t.pause();
+        assert!(t.tick().is_none());
+        assert_eq!(t.remaining_ms, before);
+    }
+
+    #[test]
+    fn tick_decrements_remaining_ms_by_1000() {
+        let mut t = Timer::new(1, 15);
+        t.start();
+        let before = t.remaining_ms;
+        assert!(t.tick().is_none());
+        assert_eq!(t.remaining_ms, before - 1000);
+    }
+
+    #[test]
+    fn tick_enters_break_when_running_expires() {
+        let mut t = Timer::new(1, 15);
+        t.start();
+        t.remaining_ms = 500;
+        assert_eq!(t.tick(), Some(Transition::EnteredBreak));
+        assert_eq!(t.phase, Phase::Break);
+        assert_eq!(t.remaining_ms, 15_000);
+    }
+
+    #[test]
+    fn tick_enters_running_when_break_expires() {
+        let mut t = Timer::new(30, 1);
+        t.trigger_break();
+        t.remaining_ms = 500;
+        assert_eq!(t.tick(), Some(Transition::EnteredRunning));
+        assert_eq!(t.phase, Phase::Running);
+        assert_eq!(t.remaining_ms, 30 * 60 * 1000);
+    }
+
+    #[test]
+    fn tick_exact_boundary_running() {
+        let mut t = Timer::new(1, 15);
+        t.start();
+        t.remaining_ms = 1000;
+        assert_eq!(t.tick(), Some(Transition::EnteredBreak));
+    }
+
+    #[test]
+    fn tick_exact_boundary_break() {
+        let mut t = Timer::new(25, 1);
+        t.trigger_break();
+        t.remaining_ms = 1000;
+        assert_eq!(t.tick(), Some(Transition::EnteredRunning));
+    }
+
+    #[test]
+    fn remaining_clamps_negative_to_zero() {
+        let t = Timer {
+            remaining_ms: -5000,
+            ..Timer::new(25, 15)
+        };
+        assert_eq!(t.remaining(), (0, 0));
+    }
+
+    #[test]
+    fn remaining_decomposes_correctly() {
+        let t = Timer {
+            remaining_ms: 2 * 60_000 + 37_000,
+            ..Timer::new(25, 15)
+        };
+        assert_eq!(t.remaining(), (2, 37));
+    }
+
+    #[test]
+    fn remaining_zero() {
+        let t = Timer {
+            remaining_ms: 0,
+            ..Timer::new(25, 15)
+        };
+        assert_eq!(t.remaining(), (0, 0));
+    }
+
+    #[test]
+    fn formatted_returns_mm_ss() {
+        let t = Timer {
+            remaining_ms: 5 * 60_000 + 4_000,
+            ..Timer::new(25, 15)
+        };
+        assert_eq!(t.formatted(), "05:04");
+    }
+
+    #[test]
+    fn formatted_zero() {
+        let t = Timer {
+            remaining_ms: 0,
+            ..Timer::new(25, 15)
+        };
+        assert_eq!(t.formatted(), "00:00");
+    }
+
+    #[test]
+    fn stop_resets_to_idle() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        t.stop();
+        assert_eq!(t.phase, Phase::Idle);
+        assert_eq!(t.remaining_ms, 0);
+    }
+
+    #[test]
+    fn stop_idle_is_idempotent() {
+        let mut t = Timer::new(25, 15);
+        t.stop();
+        assert_eq!(t.phase, Phase::Idle);
+    }
+
+    #[test]
+    fn trigger_break_sets_break_phase_and_remaining() {
+        let mut t = Timer::new(25, 30);
+        t.trigger_break();
+        assert_eq!(t.phase, Phase::Break);
+        assert_eq!(t.remaining_ms, 30_000);
+    }
+
+    #[test]
+    fn update_interval_changes_field() {
+        let mut t = Timer::new(25, 15);
+        t.update_interval(45);
+        assert_eq!(t.interval_minutes, 45);
+    }
+
+    #[test]
+    fn update_interval_resets_running_timer() {
+        let mut t = Timer::new(25, 15);
+        t.start();
+        t.remaining_ms = 60_000;
+        t.update_interval(30);
+        assert_eq!(t.remaining_ms, 30 * 60 * 1000);
+    }
+
+    #[test]
+    fn update_interval_does_not_reset_non_running() {
+        let mut t = Timer::new(25, 15);
+        t.trigger_break();
+        t.remaining_ms = 5_000;
+        t.update_interval(30);
+        assert_eq!(t.remaining_ms, 5_000);
+        assert_eq!(t.phase, Phase::Break);
+    }
+
+    #[test]
+    fn update_duration_changes_field() {
+        let mut t = Timer::new(25, 15);
+        t.update_duration(60);
+        assert_eq!(t.duration_seconds, 60);
+    }
+
+    #[test]
+    fn full_idle_running_break_running_cycle() {
+        let mut t = Timer::new(1, 1);
+        assert_eq!(t.phase, Phase::Idle);
+        t.start();
+        assert_eq!(t.phase, Phase::Running);
+        t.remaining_ms = 1000;
+        assert_eq!(t.tick(), Some(Transition::EnteredBreak));
+        assert_eq!(t.phase, Phase::Break);
+        t.remaining_ms = 1000;
+        assert_eq!(t.tick(), Some(Transition::EnteredRunning));
+        assert_eq!(t.phase, Phase::Running);
+        assert!(t.remaining_ms > 0);
+    }
+
+    #[test]
+    fn multiple_ticks_near_boundary() {
+        let mut t = Timer::new(1, 15);
+        t.start();
+        t.remaining_ms = 2500;
+        assert!(t.tick().is_none()); // 1500 left
+        assert!(t.tick().is_none()); // 500 left
+        assert_eq!(t.tick(), Some(Transition::EnteredBreak)); // -500 -> triggered
+    }
+
+    #[test]
+    fn pause_after_trigger_break_stays_in_break() {
+        let mut t = Timer::new(25, 15);
+        t.trigger_break();
+        t.pause();
+        assert_eq!(t.phase, Phase::Break); // can't pause break
+    }
+}

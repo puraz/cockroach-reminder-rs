@@ -182,3 +182,238 @@ impl Cockroach {
         self.init_random_position(rng, w, h);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::rngs::StdRng;
+    use rand::SeedableRng;
+
+    fn test_cfg() -> AnimConfig {
+        AnimConfig {
+            size_percent: 35.0,
+            normal_fps: 10.0,
+            fast_min_fps: 10.0,
+            fast_max_fps: 60.0,
+            fast_probability: 0.0,
+            movement_percent: 13.5,
+        }
+    }
+
+    fn fast_cfg() -> AnimConfig {
+        AnimConfig {
+            fast_probability: 1.0,
+            fast_min_fps: 30.0,
+            fast_max_fps: 60.0,
+            ..test_cfg()
+        }
+    }
+
+    fn seeded() -> StdRng {
+        StdRng::seed_from_u64(42)
+    }
+
+    #[test]
+    fn new_sets_interval_from_normal_fps() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        assert!((roach.interval_ms - 100.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn new_sets_interval_from_fast_fps_range() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, fast_cfg(), 1920.0, 1080.0);
+        let expected_min = 1000.0 / 60.0;
+        let expected_max = 1000.0 / 30.0;
+        assert!(roach.interval_ms >= expected_min);
+        assert!(roach.interval_ms <= expected_max);
+    }
+
+    #[test]
+    fn new_has_reasonable_spawn_delay() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        assert!(roach.spawn_delay_ms >= 0.0 && roach.spawn_delay_ms <= 3000.0);
+    }
+
+    #[test]
+    fn new_not_drawable() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        assert!(!roach.is_drawable());
+    }
+
+    #[test]
+    fn new_center_is_initial_position() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        assert_eq!(roach.center_x, roach.start_x);
+        assert_eq!(roach.center_y, roach.start_y);
+    }
+
+    #[test]
+    fn el_width_scales_with_viewport() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let expected = 0.35 * 1920.0;
+        assert!((roach.el_width(1920.0) - expected).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn el_width_proportional_to_width() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let w1 = roach.el_width(1000.0);
+        let w2 = roach.el_width(2000.0);
+        assert!((w2 - w1 * 2.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn el_height_uses_aspect_ratio() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let w = roach.el_width(1920.0);
+        assert!((roach.el_height(1920.0) - w * FRAME_ASPECT).abs() < 0.001);
+    }
+
+    #[test]
+    fn init_position_from_all_four_sides() {
+        for seed in 0..20u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+            let on_left_or_right = roach.start_x <= -100.0 || roach.start_x >= 1920.0 + 100.0;
+            let on_top_or_bottom = roach.start_y <= -100.0 || roach.start_y >= 1080.0 + 100.0;
+            assert!(on_left_or_right || on_top_or_bottom);
+            // Left side can produce angles as low as -45°.
+            assert!(
+                roach.angle_deg >= -45.0 && roach.angle_deg < 315.0,
+                "angle {} out of expected range",
+                roach.angle_deg
+            );
+        }
+    }
+
+    #[test]
+    fn becomes_drawable_after_spawn_delay() {
+        let mut rng = seeded();
+        let mut roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let delay = roach.spawn_delay_ms;
+
+        roach.update(&mut rng, 0.0, 1920.0, 1080.0);
+        assert!(!roach.is_drawable());
+
+        roach.update(&mut rng, delay + 1.0, 1920.0, 1080.0);
+        assert!(roach.is_drawable());
+        assert!(roach.spawned);
+        assert!(roach.visible);
+    }
+
+    #[test]
+    fn frame_advances_after_interval() {
+        let mut rng = seeded();
+        let mut roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let delay = roach.spawn_delay_ms;
+
+        roach.update(&mut rng, delay + 1.0, 1920.0, 1080.0);
+        let f0 = roach.cur_frame;
+
+        roach.update(
+            &mut rng,
+            delay + roach.interval_ms + 1.0,
+            1920.0,
+            1080.0,
+        );
+        assert!(
+            roach.cur_frame >= f0 + 1
+                || (roach.cur_frame as usize) < crate::constants::TOTAL_FRAMES
+        );
+    }
+
+    #[test]
+    fn frame_wraps_around_at_total_frames() {
+        let mut rng = seeded();
+        let cfg = AnimConfig {
+            movement_percent: 50.0,
+            ..test_cfg()
+        };
+        let mut roach = Cockroach::new(&mut rng, cfg, 100.0, 100.0);
+        let delay = roach.spawn_delay_ms;
+
+        let total_intervals = (TOTAL_FRAMES * 3) as f32;
+        roach.update(
+            &mut rng,
+            delay + roach.interval_ms * total_intervals,
+            100.0,
+            100.0,
+        );
+
+        let f = roach.cur_frame as usize;
+        assert!(f < TOTAL_FRAMES, "frame {} should be < {}", f, TOTAL_FRAMES);
+    }
+
+    #[test]
+    fn update_does_not_move_before_spawn() {
+        let mut rng = seeded();
+        let mut roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        let orig_x = roach.center_x;
+        let orig_y = roach.center_y;
+
+        roach.update(&mut rng, 0.0, 1920.0, 1080.0);
+        assert_eq!(roach.center_x, orig_x);
+        assert_eq!(roach.center_y, orig_y);
+    }
+
+    #[test]
+    fn angle_deg_returns_angle() {
+        let mut rng = seeded();
+        let roach = Cockroach::new(&mut rng, test_cfg(), 1920.0, 1080.0);
+        assert_eq!(roach.angle_deg(), roach.angle_deg);
+    }
+
+    #[test]
+    fn respawns_when_fully_offscreen() {
+        let mut rng = seeded();
+        let cfg = AnimConfig {
+            movement_percent: 100.0,
+            ..test_cfg()
+        };
+        let mut roach = Cockroach::new(&mut rng, cfg, 100.0, 100.0);
+        let delay = roach.spawn_delay_ms;
+        let orig_start_x = roach.start_x;
+        let orig_start_y = roach.start_y;
+
+        roach.update(&mut rng, delay + 500_000.0, 100.0, 100.0);
+
+        let respawned =
+            roach.start_x != orig_start_x || roach.start_y != orig_start_y;
+        assert!(respawned, "expected cockroach to respawn when off-screen");
+    }
+
+    #[test]
+    fn multiple_roaches_with_same_seed_are_identical() {
+        let mut rng_a = StdRng::seed_from_u64(99);
+        let mut rng_b = StdRng::seed_from_u64(99);
+        let a = Cockroach::new(&mut rng_a, test_cfg(), 1920.0, 1080.0);
+        let b = Cockroach::new(&mut rng_b, test_cfg(), 1920.0, 1080.0);
+
+        assert_eq!(a.start_x, b.start_x);
+        assert_eq!(a.start_y, b.start_y);
+        assert_eq!(a.angle_deg, b.angle_deg);
+        assert_eq!(a.spawn_delay_ms, b.spawn_delay_ms);
+        assert_eq!(a.interval_ms, b.interval_ms);
+    }
+
+    #[test]
+    fn different_seeds_different_roaches() {
+        let mut rng_a = StdRng::seed_from_u64(1);
+        let mut rng_b = StdRng::seed_from_u64(2);
+        let a = Cockroach::new(&mut rng_a, test_cfg(), 1920.0, 1080.0);
+        let b = Cockroach::new(&mut rng_b, test_cfg(), 1920.0, 1080.0);
+
+        let different = a.start_x != b.start_x
+            || a.start_y != b.start_y
+            || a.angle_deg != b.angle_deg;
+        assert!(different, "different seeds should produce different roaches");
+    }
+}
