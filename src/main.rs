@@ -53,7 +53,7 @@ enum Message {
     SettingsOpened(window::Id),
     WindowClosed(window::Id),
 
-    // Settings form edits
+    // Settings form changes apply immediately.
     IntervalChanged(u32),
     DurationChanged(u32),
     CountChanged(u32),
@@ -63,7 +63,6 @@ enum Message {
     AutoStartToggled(bool),
     LaunchAtLoginToggled(bool),
     ShowNotificationsToggled(bool),
-    SaveSettings,
     TestBreak,
     TogglePause,
 
@@ -72,8 +71,6 @@ enum Message {
 
 struct App {
     settings: Settings,
-    /// Working copy edited by the settings form; persisted only on "保存设置".
-    edit: Settings,
     timer: Timer,
     tray: Option<Tray>,
     frames: Option<Vec<SpriteFrame>>,
@@ -95,7 +92,6 @@ impl App {
         }
 
         let mut app = App {
-            edit: settings.clone(),
             settings,
             timer,
             tray: None,
@@ -226,49 +222,54 @@ impl App {
             }
 
             Message::IntervalChanged(v) => {
-                self.edit.interval_minutes = v;
+                self.settings.interval_minutes = v;
+                self.settings.clamp();
+                self.timer.update_interval(self.settings.interval_minutes);
+                self.settings.save();
+                self.refresh_tray();
                 Task::none()
             }
             Message::DurationChanged(v) => {
-                self.edit.duration_seconds = v;
+                self.settings.duration_seconds = v;
+                self.settings.clamp();
+                self.timer.update_duration(self.settings.duration_seconds);
+                self.settings.save();
+                self.refresh_tray();
                 Task::none()
             }
             Message::CountChanged(v) => {
-                self.edit.cockroach_count = v;
+                self.settings.cockroach_count = v;
+                self.persist_settings();
                 Task::none()
             }
             Message::SizeChanged(v) => {
-                self.edit.cockroach_size_percent = v;
+                self.settings.cockroach_size_percent = v;
+                self.persist_settings();
                 Task::none()
             }
             Message::SpeedChanged(v) => {
-                self.edit.movement_percent = v;
+                self.settings.movement_percent = v;
+                self.persist_settings();
                 Task::none()
             }
             Message::FastProbChanged(v) => {
-                self.edit.fast_speed_probability = v as f32 / 100.0;
+                self.settings.fast_speed_probability = v as f32 / 100.0;
+                self.persist_settings();
                 Task::none()
             }
             Message::AutoStartToggled(v) => {
-                self.edit.auto_start = v;
+                self.settings.auto_start = v;
+                self.persist_settings();
                 Task::none()
             }
             Message::LaunchAtLoginToggled(v) => {
-                self.edit.launch_at_login = v;
+                self.settings.launch_at_login = v;
+                self.persist_settings();
                 Task::none()
             }
             Message::ShowNotificationsToggled(v) => {
-                self.edit.show_notifications = v;
-                Task::none()
-            }
-
-            Message::SaveSettings => {
-                self.edit.clamp();
-                self.settings = self.edit.clone();
-                self.settings.save();
-                self.timer.update_interval(self.settings.interval_minutes);
-                self.timer.update_duration(self.settings.duration_seconds);
-                self.refresh_tray();
+                self.settings.show_notifications = v;
+                self.persist_settings();
                 Task::none()
             }
 
@@ -328,10 +329,9 @@ impl App {
             platform::activate_app();
             return window::gain_focus::<Message>(id);
         }
-        self.edit = self.settings.clone();
         let (id, task) = window::open(window::Settings {
-            size: iced::Size::new(580.0, 720.0),
-            min_size: Some(iced::Size::new(500.0, 600.0)),
+            size: iced::Size::new(480.0, 690.0),
+            min_size: Some(iced::Size::new(400.0, 560.0)),
             resizable: true,
             transparent: false,
             decorations: true,
@@ -390,7 +390,13 @@ impl App {
     // --- Settings UI ---
 
     fn view_settings(&self) -> Element<'_, Message> {
-        settings_ui::view(&self.edit, self.timer.phase, &self.timer.formatted())
+        settings_ui::view(&self.settings, self.timer.phase, &self.timer.formatted())
+    }
+
+    fn persist_settings(&mut self) {
+        self.settings.clamp();
+        self.settings.save();
+        self.refresh_tray();
     }
 }
 
@@ -525,7 +531,6 @@ mod tests {
         };
 
         App {
-            edit: settings.clone(),
             settings: settings.clone(),
             timer: Timer::new(settings.interval_minutes, settings.duration_seconds),
             tray: None,
