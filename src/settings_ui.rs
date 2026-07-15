@@ -17,7 +17,7 @@ use iced::{Alignment, Border, Color, Element, Length, Theme};
 pub fn view(settings: &Settings, phase: Phase, formatted: &str) -> Element<'static, Message> {
     let header = column![
         text("COCKROACH REMINDER").size(12).color(muted()),
-        text("让休息准时发生").size(29).color(ink()),
+        text("定时休息，保护健康！").size(29).color(ink()),
     ]
     .spacing(7)
     .width(Length::Fill);
