@@ -25,6 +25,7 @@ pub struct OverlayManager {
     pub pending_break: bool,
     pub anim_start: Instant,
     pub rng: Option<rand::rngs::ThreadRng>,
+    prewarmed: bool,
 }
 
 impl OverlayManager {
@@ -34,6 +35,7 @@ impl OverlayManager {
             pending_break: false,
             anim_start: Instant::now(),
             rng: Some(rand::thread_rng()),
+            prewarmed: false,
         }
     }
 
@@ -100,6 +102,7 @@ impl OverlayManager {
         settings: &Settings,
         screens: Vec<platform::ScreenFrame>,
     ) -> Task<Message> {
+        self.prewarmed = false;
         self.sync_overlays(settings, screens, true)
     }
 
@@ -222,6 +225,7 @@ impl OverlayManager {
     }
 
     pub fn close_overlays_at(&mut self, now: Instant) -> Task<Message> {
+        self.prewarmed = false;
         let tasks = self.overlays.iter_mut().map(|ov| {
             ov.active = false;
             ov.cockroaches.clear();
@@ -241,7 +245,8 @@ impl OverlayManager {
             return Task::none();
         }
 
-        if timer.phase == Phase::Running && timer.remaining_ms <= OVERLAY_PREWARM_BEFORE_BREAK {
+        if !self.prewarmed && timer.phase == Phase::Running && timer.remaining_ms <= OVERLAY_PREWARM_BEFORE_BREAK {
+            self.prewarmed = true;
             return self.prewarm_overlays_with_settings(settings);
         }
 
