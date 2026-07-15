@@ -244,12 +244,6 @@ fn status_style(_: &Theme) -> container::Style {
 
 fn value_badge_style(_: &Theme) -> container::Style {
     container::Style {
-        background: Some(accent_wash().into()),
-        border: Border {
-            color: accent_dim(),
-            width: 1.0,
-            radius: 6.0.into(),
-        },
         ..container::Style::default()
     }
 }
