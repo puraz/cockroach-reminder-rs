@@ -16,10 +16,8 @@ use iced::{Alignment, Border, Color, Element, Length, Theme};
 /// Render the settings window content.
 pub fn view(settings: &Settings, phase: Phase, formatted: &str) -> Element<'static, Message> {
     let header = column![
-        text("COCKROACH REMINDER").size(12).color(muted()),
         text("定时休息，保护健康！").size(29).color(ink()),
     ]
-    .spacing(7)
     .width(Length::Fill);
 
     let timer_section = section(
